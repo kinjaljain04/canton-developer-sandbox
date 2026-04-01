@@ -1,0 +1,110 @@
+version: '3.8'
+
+# One-click Canton developer sandbox.
+# This setup includes:
+# - A PostgreSQL database for persistence.
+# - A Canton Validator node for transaction ordering.
+# - A Canton Participant node (DevNet) where Daml contracts will live.
+# - A JSON API service to interact with the Participant's ledger via HTTP.
+#
+# Before running `docker compose up`, you must create the config files:
+# - ./config/validator/validator.conf
+# - ./config/participant1/participant1.conf
+#
+# These configuration files are essential for bootstrapping the Canton network.
+# Refer to the Canton documentation for examples.
+
+networks:
+  canton-dev-net:
+    driver: bridge
+    name: canton-dev-net
+
+volumes:
+  postgres-data:
+    driver: local
+
+services:
+  postgres:
+    image: postgres:14-alpine
+    container_name: postgres
+    environment:
+      - POSTGRES_DB=canton
+      - POSTGRES_USER=canton
+      - POSTGRES_PASSWORD=canton
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - canton-dev-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U canton -d canton"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  validator:
+    image: digitalasset/canton-community:3.1.0
+    container_name: validator
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command:
+      - daemon
+      - --config=/etc/canton/validator.conf
+      - -Dcanton.storage.type=postgres
+      - -Dcanton.storage.config.url=jdbc:postgresql://postgres:5432/canton
+      - -Dcanton.storage.config.user=canton
+      - -Dcanton.storage.config.password=canton
+    volumes:
+      - ./config/validator:/etc/canton
+    ports:
+      - "5011:5011" # Public API
+      - "5012:5012" # Admin API
+    networks:
+      - canton-dev-net
+    restart: unless-stopped
+
+  participant1:
+    image: digitalasset/canton-community:3.1.0
+    container_name: participant1
+    depends_on:
+      postgres:
+        condition: service_healthy
+      validator:
+        condition: service_started # a simple healthcheck on validator is non-trivial
+    command:
+      - daemon
+      - --config=/etc/canton/participant1.conf
+      - -Dcanton.storage.type=postgres
+      - -Dcanton.storage.config.url=jdbc:postgresql://postgres:5432/canton
+      - -Dcanton.storage.config.user=canton
+      - -Dcanton.storage.config.password=canton
+    volumes:
+      - ./config/participant1:/etc/canton
+    ports:
+      - "5021:5021" # Ledger API
+      - "5022:5022" # Admin API
+    networks:
+      - canton-dev-net
+    restart: unless-stopped
+
+  json-api:
+    image: digitalasset/json-api:3.1.0
+    container_name: json-api
+    depends_on:
+      - participant1
+    command:
+      - --ledger-host=participant1
+      - --ledger-port=5021
+      - --http-port=7575
+      - --address=0.0.0.0
+      # Enable command submissions for any party without explicit authorization
+      # WARNING: Use only for local development. Do not use in production.
+      - --allow-insecure-party-management=true
+    ports:
+      - "7575:7575" # JSON API port
+    networks:
+      - canton-dev-net
+    restart: unless-stopped
