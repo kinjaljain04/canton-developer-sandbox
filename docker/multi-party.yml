@@ -1,0 +1,184 @@
+version: "3.8"
+
+# Canton multi-party topology with three isolated participant nodes.
+#
+# This setup is ideal for testing multi-party workflows where each
+# party maintains its own private data store, reflecting a real-world
+# Canton deployment.
+#
+# Usage:
+#   1. Ensure you have configuration files in the ./conf directory:
+#      - participant1.conf, participant2.conf, participant3.conf
+#      - sequencer.conf, mediator.conf
+#      - bootstrap.canton
+#   2. Start the network:
+#      docker compose -f docker/multi-party.yml up -d
+#   3. Stop the network:
+#      docker compose -f docker/multi-party.yml down -v
+
+x-canton-base: &canton-base
+  image: digitalasset/canton:3.4.0
+  networks:
+    - canton-network
+
+x-postgres-base: &postgres-base
+  image: postgres:15.6-alpine
+  environment:
+    - POSTGRES_CLIENT_MIN_MESSAGES=WARNING
+  healthcheck:
+    test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+    interval: 5s
+    timeout: 5s
+    retries: 10
+  networks:
+    - canton-network
+  volumes:
+    - canton-data:/var/lib/postgresql/data
+
+services:
+  # ---------------------------------------------------------------------------
+  # Participant Nodes & Databases
+  # ---------------------------------------------------------------------------
+  postgres_participant1:
+    <<: *postgres-base
+    hostname: postgres_participant1
+    container_name: postgres_participant1
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_DB=participant1
+      - POSTGRES_USER=participant1
+      - POSTGRES_PASSWORD=password
+
+  participant1:
+    <<: *canton-base
+    hostname: participant1
+    container_name: participant1
+    depends_on:
+      postgres_participant1:
+        condition: service_healthy
+    command:
+      - daemon
+      - --config=/etc/canton/participant1.conf
+      - --bootstrap=/etc/canton/bootstrap.canton
+    ports:
+      - "6866:6865" # Ledger API gRPC
+      - "7575:7575" # Ledger API JSON
+      - "10012:10012" # Admin API
+    volumes:
+      - ./conf/participant1.conf:/etc/canton/participant1.conf
+      - ./conf/bootstrap.canton:/etc/canton/bootstrap.canton
+
+  postgres_participant2:
+    <<: *postgres-base
+    hostname: postgres_participant2
+    container_name: postgres_participant2
+    ports:
+      - "5433:5432"
+    environment:
+      - POSTGRES_DB=participant2
+      - POSTGRES_USER=participant2
+      - POSTGRES_PASSWORD=password
+
+  participant2:
+    <<: *canton-base
+    hostname: participant2
+    container_name: participant2
+    depends_on:
+      postgres_participant2:
+        condition: service_healthy
+    command: daemon --config=/etc/canton/participant2.conf
+    ports:
+      - "6867:6865" # Ledger API gRPC
+      - "7576:7575" # Ledger API JSON
+      - "10022:10022" # Admin API
+    volumes:
+      - ./conf/participant2.conf:/etc/canton/participant2.conf
+
+  postgres_participant3:
+    <<: *postgres-base
+    hostname: postgres_participant3
+    container_name: postgres_participant3
+    ports:
+      - "5434:5432"
+    environment:
+      - POSTGRES_DB=participant3
+      - POSTGRES_USER=participant3
+      - POSTGRES_PASSWORD=password
+
+  participant3:
+    <<: *canton-base
+    hostname: participant3
+    container_name: participant3
+    depends_on:
+      postgres_participant3:
+        condition: service_healthy
+    command: daemon --config=/etc/canton/participant3.conf
+    ports:
+      - "6868:6865" # Ledger API gRPC
+      - "7577:7575" # Ledger API JSON
+      - "10032:10032" # Admin API
+    volumes:
+      - ./conf/participant3.conf:/etc/canton/participant3.conf
+
+  # ---------------------------------------------------------------------------
+  # Domain Nodes (Sequencer, Mediator) & Databases
+  # ---------------------------------------------------------------------------
+  postgres_sequencer:
+    <<: *postgres-base
+    hostname: postgres_sequencer
+    container_name: postgres_sequencer
+    ports:
+      - "5435:5432"
+    environment:
+      - POSTGRES_DB=sequencer
+      - POSTGRES_USER=sequencer
+      - POSTGRES_PASSWORD=password
+
+  sequencer:
+    <<: *canton-base
+    hostname: sequencer
+    container_name: sequencer
+    depends_on:
+      postgres_sequencer:
+        condition: service_healthy
+    command: daemon --config=/etc/canton/sequencer.conf
+    ports:
+      - "11011:11011" # Public API
+      - "11012:11012" # Admin API
+    volumes:
+      - ./conf/sequencer.conf:/etc/canton/sequencer.conf
+
+  postgres_mediator:
+    <<: *postgres-base
+    hostname: postgres_mediator
+    container_name: postgres_mediator
+    ports:
+      - "5436:5432"
+    environment:
+      - POSTGRES_DB=mediator
+      - POSTGRES_USER=mediator
+      - POSTGRES_PASSWORD=password
+
+  mediator:
+    <<: *canton-base
+    hostname: mediator
+    container_name: mediator
+    depends_on:
+      postgres_mediator:
+        condition: service_healthy
+    command: daemon --config=/etc/canton/mediator.conf
+    ports:
+      - "12011:12011" # Public API
+      - "12012:12012" # Admin API
+    volumes:
+      - ./conf/mediator.conf:/etc/canton/mediator.conf
+
+networks:
+  canton-network:
+    name: canton-network
+    driver: bridge
+
+volumes:
+  canton-data:
+    name: canton-data
